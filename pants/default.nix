@@ -6,7 +6,7 @@
 # python311 interpreter (the wheel is cp311; Pants 2.31 pins
 # Requires-Python ==3.11.*).
 { lib, stdenv, fetchurl, python311, makeWrapper, autoPatchelfHook
-, patchelf, zlib
+, patchelf, zlib, docker
 , pantsVersion, pantsHash
 # Extra interpreters exposed on the wrapper's PATH, e.g. [ python314 ]
 # so Pants can discover them for user resolves via interpreter search.
@@ -76,9 +76,10 @@ stdenv.mkDerivation rec {
     mkdir -p $out/bin
     makeWrapper ${python311}/bin/python $out/bin/pants \
       --prefix PYTHONPATH : $out/lib/pants \
-      --prefix PATH : ${lib.makeBinPath ([ python311 patchelf ] ++ extraPythons)} \
+      --prefix PATH : ${lib.makeBinPath ([ python311 patchelf docker ] ++ extraPythons)} \
       --set NO_SCIE_WARNING 1 \
-      --run 'if [ "''${PANTS_NIX_AUTOPATCH:-1}" = 1 ]; then $out/bin/pants-patch-caches >/dev/null 2>&1 || true; fi' \
+      --set LD_LIBRARY_PATH "${lib.makeLibraryPath [ stdenv.cc.cc.lib zlib ]}" \
+      --run 'if [ "''${PANTS_NIX_AUTOPATCH:-1}" = 1 ]; then ($out/bin/pants-patch-caches >/dev/null 2>&1 &); fi' \
       --add-flags "-m pants"
 
     # Pants' external tools (rustup-managed Rust toolchains, downloaded
