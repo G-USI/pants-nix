@@ -65,7 +65,7 @@ Regenerate the version data and commit it:
 ```console
 $ scripts/list-versions.sh > /tmp/versions.txt
 $ scripts/gen-versions.sh /tmp/versions.txt
-$ git add pants/versions.nix pants/versions/
+$ git add pants/versions/
 ```
 
 Unknown versions then fail loudly if not generated.
