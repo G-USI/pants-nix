@@ -131,41 +131,38 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           pkgs39 = nixpkgs-py39.legacyPackages.${system};
+          # One smoke per wheel-era: cp39 (oldest), cp311 (2.31.0),
+          # cp314 (latest) — each asserts its own --version output.
+          oldest = nixpkgs.lib.head (nixpkgs.lib.naturalSort (nixpkgs.lib.attrNames versionData));
+          mkSmoke = name: version: extraPythons:
+            pkgs.runCommand "pants-${name}-smoke"
+              {
+                nativeBuildInputs = [
+                  (mkPants pkgs pkgs39 {
+                    inherit version extraPythons;
+                  })
+                ];
+                # pantsd's socket bootstrap does not survive the check
+                # sandbox; the version goal does not need it. HOME must
+                # point somewhere writable — TMPDIR is guaranteed and
+                # portable across Nix versions (unlike /build).
+                PANTS_PANTSD = "false";
+              }
+              ''
+                export HOME="$TMPDIR"
+                mkdir -p project && cd project
+                printf '[GLOBAL]\npants_version = "${version}"\n' > pants.toml
+                pants --version > version.out
+                grep -qx ${version} version.out || {
+                  echo "unexpected version:"; cat version.out; exit 1;
+                }
+                cp version.out $out
+              '';
         in
         {
-          version-smoke = pkgs.runCommand "pants-version-smoke"
-            {
-              nativeBuildInputs = [ self.packages.${system}.default ];
-              # pantsd's socket bootstrap does not survive the check
-              # sandbox; the version goal does not need it. The sandbox
-              # HOME (/homeless-shelter) is not writable — pants needs a
-              # writable ~/.cache/pants for its LMDB store.
-              PANTS_PANTSD = "false";
-              HOME = "/build";
-            }
-            ''
-              mkdir -p project && cd project
-              printf '[GLOBAL]\npants_version = "${latestVersion}"\n' > pants.toml
-              pants --version > version.out
-              grep -qx ${latestVersion} version.out || {
-                echo "unexpected version:"; cat version.out; exit 1;
-              }
-              cp version.out $out
-            '';
-          oldest-smoke = pkgs39.runCommand "pants-oldest-version-smoke"
-            {
-              nativeBuildInputs = [
-                (mkPants pkgs pkgs39 { version = nixpkgs.lib.head (nixpkgs.lib.naturalSort (nixpkgs.lib.attrNames versionData)); })
-              ];
-              PANTS_PANTSD = "false";
-              HOME = "/build";
-            }
-            ''
-              mkdir -p project && cd project
-              printf '[GLOBAL]\npants_version = "${nixpkgs.lib.head (nixpkgs.lib.naturalSort (nixpkgs.lib.attrNames versionData))}"\n' > pants.toml
-              pants --version > version.out
-              cp version.out $out
-            '';
+          version-smoke = mkSmoke "latest" latestVersion [ pkgs.python314 ];
+          py311-smoke = mkSmoke "py311" "2.31.0" [ ];
+          oldest-smoke = mkSmoke "oldest" oldest [ ];
         }
       );
     };
