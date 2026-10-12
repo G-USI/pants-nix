@@ -1,47 +1,43 @@
 # Pants, packaged from the official GitHub-release wheel — no FHS.
 #
 # The native engine (pants/bin/native_client) and native dependency
-# extensions (libcst, psutil, setproctitle, hdrhistogram) are patchelf'd
-# against Nix libraries by autoPatchelfHook. Pants runs on the Nix
-# python311 interpreter (the wheel is cp311; Pants 2.31 pins
-# Requires-Python ==3.11.*).
-{ lib, stdenv, fetchurl, python311, makeWrapper, autoPatchelfHook
+# extensions are patchelf'd against Nix libraries by autoPatchelfHook.
+# Pants runs on the Nix interpreter matching the release wheel's CPython
+# tag (python39 / python311 / python314 — see pants/versions.nix).
+{ lib, stdenv, fetchurl, makeWrapper, autoPatchelfHook
 , patchelf, zlib, docker
-, pantsVersion, pantsHash
+, interpreter
+, pantsVersion, pantsUrl, pantsHash
 # Extra interpreters exposed on the wrapper's PATH, e.g. [ python314 ]
 # so Pants can discover them for user resolves via interpreter search.
 , extraPythons ? [ ]
-, deps ? import ./deps.nix
+, deps ? [ ]
 }:
 
+let
+  python = interpreter;
+in
 stdenv.mkDerivation rec {
   pname = "pants";
   version = pantsVersion;
 
-  src = fetchurl {
-    url = "https://github.com/pantsbuild/pants/releases/download/release_${version}/pantsbuild_pants-${version}-cp311-cp311-manylinux2014_x86_64.whl";
-    hash = pantsHash;
-  };
+  src = fetchurl { url = pantsUrl; hash = pantsHash; };
 
-  # Wheels for the exact Requires-Dist pins (see deps.nix).
+  # Wheels for the exact Requires-Dist pins (per-version data generated
+  # from the pants repo's own lockfile — see scripts/generate.py).
   depWheels = map (d: fetchurl { inherit (d) url hash; }) deps;
 
-  nativeBuildInputs = [ python311.pkgs.pip makeWrapper autoPatchelfHook ];
-  buildInputs = [ python311 stdenv.cc.cc.lib ];
+  nativeBuildInputs = [ python.pkgs.pip makeWrapper autoPatchelfHook ];
+  buildInputs = [ python stdenv.cc.cc.lib ];
 
   # Interpreter/rpath handed to the named-cache patch sweep below.
   nixInterpreter = "${stdenv.cc.libc}/lib/ld-linux-x86-64.so.2";
-  nixRpath = lib.makeLibraryPath [
-    stdenv.cc.cc.lib
-    zlib
-  ];
+  nixRpath = lib.makeLibraryPath [ stdenv.cc.cc.lib zlib ];
 
   dontConfigure = true;
   dontBuild = true;
   dontUnpack = true;
 
-  # The engine reads argv[0] to decide some bootstrap behavior; keep the
-  # binary named `pants` and let `python -m pants` handle the rest.
   installPhase = ''
     runHook preInstall
 
@@ -58,27 +54,56 @@ stdenv.mkDerivation rec {
       --target $out/lib/pants \
       $TMP/wheels/*.whl
 
-    # Wheels record no exec bits; Pants execs these directly.
-    chmod 0755 $out/lib/pants/pants/bin/sandboxer $out/lib/pants/pants/bin/native_client
+    # Wheels record no exec bits; Pants execs these directly. Older
+    # releases may not ship the sandboxer — chmod what exists.
+    for f in sandboxer native_client; do
+      [ -f $out/lib/pants/pants/bin/$f ] && chmod 0755 $out/lib/pants/pants/bin/$f
+    done
 
-    # Pants' loader unconditionally chmod()s the sandboxer next to itself,
-    # which is fatal on the read-only store. Guard it: if the bit is
-    # already set (we did, above), skip the syscall.
-    ${python311.interpreter} - <<PYEOF
-    path = "$out/lib/pants/pants/bin/pants_loader.py"
-    src = open(path).read()
-    old = "os.chmod(sandboxer_bin, 0o755)"
-    new = "if not os.access(sandboxer_bin, os.X_OK):\n                    os.chmod(sandboxer_bin, 0o755)"
-    assert src.count(old) == 1, "pants_loader patch target not found"
-    open(path, "w").write(src.replace(old, new))
+    # Pants' loaders unconditionally chmod() embedded binaries next to
+    # themselves, which is fatal on the read-only store. Guard every
+    # known variant: if the bit is already set (we did, above), skip the
+    # syscall. Loader code drifts between releases — patch each pattern
+    # where found exactly once, skip when absent, refuse on ambiguity.
+    ${python.interpreter} - <<PYEOF
+    import pathlib
+
+    root = pathlib.Path("$out/lib/pants")
+    guards = {
+        # pants/bin/pants_loader.py (<= 2.31)
+        "os.chmod(sandboxer_bin, 0o755)":
+            "if not os.access(sandboxer_bin, os.X_OK):\n                    os.chmod(sandboxer_bin, 0o755)",
+        # pants/engine/embedded_binary.py (2.32+)
+        "os.chmod(bin_path, 0o755)":
+            "if not os.access(bin_path, os.X_OK):\n                os.chmod(bin_path, 0o755)",
+    }
+    patched = 0
+    for py in root.rglob("*.py"):
+        try:
+            src = py.read_text()
+        except OSError:
+            continue
+        orig = src
+        for old, new in guards.items():
+            n = src.count(old)
+            if n == 1:
+                src = src.replace(old, new)
+                patched += 1
+            elif n > 1:
+                raise SystemExit(
+                    f"{py}: {n} occurrences of {old[:40]!r}, refusing to patch"
+                )
+        if src != orig:
+            py.write_text(src)
+    print(f"pants loader chmod guards patched: {patched}")
     PYEOF
 
     mkdir -p $out/bin
-    makeWrapper ${python311}/bin/python $out/bin/pants \
+    makeWrapper ${python}/bin/python $out/bin/pants \
       --prefix PYTHONPATH : $out/lib/pants \
-      --prefix PATH : ${lib.makeBinPath ([ python311 patchelf docker ] ++ extraPythons)} \
+      --prefix PATH : ${lib.makeBinPath ([ python patchelf docker ] ++ extraPythons)} \
       --set NO_SCIE_WARNING 1 \
-      --set LD_LIBRARY_PATH "${lib.makeLibraryPath [ stdenv.cc.cc.lib zlib ]}" \
+      --set LD_LIBRARY_PATH "${nixRpath}" \
       --run 'if [ "''${PANTS_NIX_AUTOPATCH:-1}" = 1 ]; then ($out/bin/pants-patch-caches >/dev/null 2>&1 &); fi' \
       --add-flags "-m pants"
 
@@ -92,9 +117,6 @@ stdenv.mkDerivation rec {
 
     runHook postInstall
   '';
-
-  # autoPatchelfHook's fixup phase scans $out and rewrites every ELF it
-  # finds (engine + native extension modules) against the buildInputs.
 
   meta = {
     description = "Pants build system (patchelf-native, no FHS)";
