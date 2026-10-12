@@ -72,6 +72,33 @@
           mkPants pkgs pkgs39 { inherit version; };
       };
 
+      # Pinned per-system builders: they use THIS flake's nixpkgs, so
+      # results are identical for every consumer and a shared binary
+      # cache actually hits — builds from the consumer's own nixpkgs
+      # differ per input revision and can never be cached.
+      pinned = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs39 = nixpkgs-py39.legacyPackages.${system};
+          mkPantsPinned = args: mkPants pkgs pkgs39 args;
+        in
+        {
+          inherit mkPantsPinned;
+          fromPantsToml = tomlPath:
+            let
+              pantsToml = builtins.fromTOML (builtins.readFile tomlPath);
+              global = pantsToml.GLOBAL or pantsToml.global or null;
+              version =
+                if global == null then
+                  throw "pants-nix: no [GLOBAL] section in ${toString tomlPath}"
+                else
+                  global.pants_version;
+            in
+            mkPantsPinned { inherit version; };
+        }
+      );
+
       packages = forAllSystems (
         system:
         let
