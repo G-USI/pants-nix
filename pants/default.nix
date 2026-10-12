@@ -31,7 +31,7 @@ stdenv.mkDerivation rec {
   buildInputs = [ python stdenv.cc.cc.lib ];
 
   # Interpreter/rpath handed to the named-cache patch sweep below.
-  nixInterpreter = "${stdenv.cc.libc}/lib/ld-linux-x86-64.so.2";
+  nixInterpreter = stdenv.cc.bintools.dynamicLinker;
   nixRpath = lib.makeLibraryPath [ stdenv.cc.cc.lib zlib ];
 
   dontConfigure = true;
@@ -67,6 +67,7 @@ stdenv.mkDerivation rec {
     # where found exactly once, skip when absent, refuse on ambiguity.
     ${python.interpreter} - <<PYEOF
     import pathlib
+    import py_compile
 
     root = pathlib.Path("$out/lib/pants")
     guards = {
@@ -95,6 +96,14 @@ stdenv.mkDerivation rec {
                 )
         if src != orig:
             py.write_text(src)
+            # pip byte-compiled the ORIGINAL source; regenerate the .pyc
+            # so the first launch doesn't recompile the patched module.
+            py_compile.compile(str(py), doraise=True)
+    if patched == 0:
+        raise SystemExit(
+            "pants-nix: no loader chmod guards patched — unknown loader "
+            "layout; the read-only store would crash Pants at runtime"
+        )
     print(f"pants loader chmod guards patched: {patched}")
     PYEOF
 
@@ -103,7 +112,7 @@ stdenv.mkDerivation rec {
       --prefix PYTHONPATH : $out/lib/pants \
       --prefix PATH : ${lib.makeBinPath ([ python patchelf ] ++ extraPythons)} \
       --set NO_SCIE_WARNING 1 \
-      --set LD_LIBRARY_PATH "${nixRpath}" \
+      --prefix LD_LIBRARY_PATH : "${nixRpath}" \
       --run "if [ \"\''${PANTS_NIX_AUTOPATCH:-1}\" = 1 ]; then $out/bin/pants-patch-caches; fi" \
       --add-flags "-m pants"
 
