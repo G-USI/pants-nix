@@ -5,7 +5,7 @@
 # Pants runs on the Nix interpreter matching the release wheel's CPython
 # tag (python39 / python311 / python314 — see pants/versions.nix).
 { lib, stdenv, fetchurl, makeWrapper, autoPatchelfHook
-, patchelf, zlib
+, patchelf, zlib, util-linux
 , interpreter
 , pantsVersion, pantsUrl, pantsHash
 # Extra interpreters exposed on the wrapper's PATH, e.g. [ python314 ]
@@ -68,6 +68,7 @@ stdenv.mkDerivation rec {
     ${python.interpreter} - <<PYEOF
     import pathlib
     import py_compile
+    import re
 
     root = pathlib.Path("$out/lib/pants")
     guards = {
@@ -99,18 +100,31 @@ stdenv.mkDerivation rec {
             # pip byte-compiled the ORIGINAL source; regenerate the .pyc
             # so the first launch doesn't recompile the patched module.
             py_compile.compile(str(py), doraise=True)
-    if patched == 0:
-        raise SystemExit(
-            "pants-nix: no loader chmod guards patched — unknown loader "
-            "layout; the read-only store would crash Pants at runtime"
+    # Invariant: no unconditional embedded-binary chmod may ship — the
+    # store is read-only and Pants crashes at runtime. Oldest eras
+    # (2.21–2.24) predate the loader chmod entirely, so patched == 0 is
+    # healthy there; what must never survive is a bare chmod of the
+    # embedded binaries outside a known guard.
+    for py in root.rglob("*.py"):
+        try:
+            text = py.read_text(errors="replace")
+        except OSError:
+            continue
+        stripped = text.replace(guards["os.chmod(bin_path, 0o755)"], "").replace(
+            guards["os.chmod(sandboxer_bin, 0o755)"], ""
         )
+        m = re.search(r"os\.chmod\((bin_path|sandboxer_bin)\b[^)]*0o755", stripped)
+        if m:
+            raise SystemExit(
+                f"{py}: unguarded embedded-binary chmod survived: {m.group(0)!r}"
+            )
     print(f"pants loader chmod guards patched: {patched}")
     PYEOF
 
     mkdir -p $out/bin
     makeWrapper ${python}/bin/python $out/bin/pants \
       --prefix PYTHONPATH : $out/lib/pants \
-      --prefix PATH : ${lib.makeBinPath ([ python patchelf ] ++ extraPythons)} \
+      --prefix PATH : ${lib.makeBinPath ([ python patchelf stdenv.cc.libc util-linux ] ++ extraPythons)} \
       --set NO_SCIE_WARNING 1 \
       --prefix LD_LIBRARY_PATH : "${nixRpath}" \
       --run "if [ \"\''${PANTS_NIX_AUTOPATCH:-1}\" = 1 ]; then $out/bin/pants-patch-caches; fi" \
