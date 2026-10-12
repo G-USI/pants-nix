@@ -104,7 +104,7 @@ stdenv.mkDerivation rec {
       --prefix PATH : ${lib.makeBinPath ([ python patchelf ] ++ extraPythons)} \
       --set NO_SCIE_WARNING 1 \
       --set LD_LIBRARY_PATH "${nixRpath}" \
-      --run 'if [ "''${PANTS_NIX_AUTOPATCH:-1}" = 1 ]; then ($out/bin/pants-patch-caches >/dev/null 2>&1 &); fi' \
+      --run "if [ \"\''${PANTS_NIX_AUTOPATCH:-1}\" = 1 ]; then $out/bin/pants-patch-caches; fi" \
       --add-flags "-m pants"
 
     # Pants' external tools (rustup-managed Rust toolchains, downloaded
