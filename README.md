@@ -83,6 +83,18 @@ Unknown versions then fail loudly if not generated.
   `PANTS_NIX_AUTOPATCH=0`.
 - Expose the interpreters your resolves need via `extraPythons`
   (`extraPythons = [ pkgs.python314 ];`).
+- **Point every downloaded-tool plugin at PATH binaries.** Any Pants
+  plugin that downloads an external tool (nodejs, terraform, helm, …)
+  will otherwise fetch a generic-Linux binary that cannot run on NixOS.
+  The standard pattern works per subsystem: set its version to one
+  **outside** the plugin's `known_versions` (e.g.
+  `PANTS_NODEJS_VERSION=24.14.0` — only `v24.10.0` is known for nodejs
+  in 2.31) and provide the real binary via the devshell PATH (nix
+  `nodejs`, …). Pants then searches PATH, version-tests the binary, and
+  runs it Nix-native. Expect to do this for each downloaded-tool plugin
+  your repo enables — leaving any of them on the download path is the
+  likely source of `Could not start dynamically linked executable`
+  errors on NixOS.
 - Tool venvs are cached per constraints — invoke Pants with a
   consistent interpreter set to avoid re-materialization.
 
@@ -93,4 +105,6 @@ Unknown versions then fail loudly if not generated.
   2.21–2.24 → python3.9 (built via the `nixpkgs-py39` input),
   2.25–2.31 → python3.11, 2.32+ → python3.14.
 - Pants still downloads your resolves at runtime (as upstream); they
-  live in Pants' caches, not the Nix store.
+  live in Pants' caches, not the Nix store. Downloaded-tool plugins
+  (see Runtime behavior) must be re-pointed at PATH binaries — on
+  NixOS the download-and-exec path fails out of the box.
