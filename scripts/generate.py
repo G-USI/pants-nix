@@ -11,10 +11,10 @@ For each "release_<tag> <wheel-filename>" input line:
   3. fetch the pants repo's user_reqs.lock for the tag and index its
      exact pins (the build truth; wheel METADATA may be bare/ranged),
   4. for every runtime dep: lock version > METADATA == pin > latest on
-     PyPI; select a wheel matching the release's CPython tag; hash it
-     with `nix store prefetch-file`,
-  5. emit pants/versions/<version>.nix, and finally the aggregate
-     pants/versions.nix index.
+      PyPI; select a wheel matching the release's CPython tag; hash it
+      with `nix store prefetch-file`,
+   5. emit pants/versions/<version>.nix — the aggregate pants/versions.nix
+      auto-aggregates the directory via builtins.readDir, nothing to write.
 
 Stdlib only: zipfile, json, re, urllib, subprocess.
 """
@@ -96,8 +96,8 @@ def lock_data(tag: str) -> dict[str, dict]:
     try:
         with urllib.request.urlopen(url, timeout=30) as r:
             text = r.read().decode()
-    except Exception:
-        return {}
+    except Exception as e:
+        raise RuntimeError(f"lockfile fetch failed for {tag}: {e}") from e
     if "END PANTS LOCKFILE METADATA" in text:
         text = text.split("END PANTS LOCKFILE METADATA", 1)[1]
     text = text.strip()
@@ -202,6 +202,12 @@ def generate(tag: str, wheel_file: str, outdir: Path) -> str:
 
     closure: dict[str, dict] = {}
     seed = [parse_spec(s)[0].lower().replace("_", "-").replace(".", "-") for s in specs]
+    missing = sorted({n for n in seed if n not in lock})
+    if missing:
+        raise ValueError(
+            f"{tag}: direct deps absent from the lockfile — the closure "
+            f"would be silently incomplete: {missing}"
+        )
     queue = [n for n in seed if n in lock]
     while queue:
         n = queue.pop(0)
@@ -228,7 +234,10 @@ def generate(tag: str, wheel_file: str, outdir: Path) -> str:
             all_rels = http_json(f"https://pypi.org/pypi/{norm}/json")["releases"]
             order = sorted(
                 all_rels,
-                key=lambda v: [int(x) if x.isdigit() else x for x in re.split(r"[.\-]", v)],
+                key=lambda v: [
+                    (int(x) if x.isdigit() else 0, x if not x.isdigit() else "")
+                    for x in re.split(r"[.\-]", v)
+                ],
             )
             start = order.index(ver) + 1 if ver in order else 0
             for cand in order[start:]:
