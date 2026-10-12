@@ -5,7 +5,7 @@
 # Pants runs on the Nix interpreter matching the release wheel's CPython
 # tag (python39 / python311 / python314 — see pants/versions.nix).
 { lib, stdenv, fetchurl, makeWrapper, autoPatchelfHook
-, patchelf, zlib, docker
+, patchelf, zlib
 , interpreter
 , pantsVersion, pantsUrl, pantsHash
 # Extra interpreters exposed on the wrapper's PATH, e.g. [ python314 ]
@@ -101,7 +101,7 @@ stdenv.mkDerivation rec {
     mkdir -p $out/bin
     makeWrapper ${python}/bin/python $out/bin/pants \
       --prefix PYTHONPATH : $out/lib/pants \
-      --prefix PATH : ${lib.makeBinPath ([ python patchelf docker ] ++ extraPythons)} \
+      --prefix PATH : ${lib.makeBinPath ([ python patchelf ] ++ extraPythons)} \
       --set NO_SCIE_WARNING 1 \
       --set LD_LIBRARY_PATH "${nixRpath}" \
       --run 'if [ "''${PANTS_NIX_AUTOPATCH:-1}" = 1 ]; then ($out/bin/pants-patch-caches >/dev/null 2>&1 &); fi' \
