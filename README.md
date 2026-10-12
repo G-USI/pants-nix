@@ -89,8 +89,8 @@ Unknown versions then fail loudly if not generated.
   The standard pattern works per subsystem: set its version to one
   **outside** the plugin's `known_versions` (e.g.
   `PANTS_NODEJS_VERSION=24.14.0` — only `v24.10.0` is known for nodejs
-  in 2.31) and provide the real binary via the devshell PATH (nix
-  `nodejs`, …). Pants then searches PATH, version-tests the binary, and
+  in 2.31) and provide the real binary via the PATH of whatever shell
+  invokes Pants (e.g. nix `nodejs` in your devenv). Pants then searches PATH, version-tests the binary, and
   runs it Nix-native. Expect to do this for each downloaded-tool plugin
   your repo enables — leaving any of them on the download path is the
   likely source of `Could not start dynamically linked executable`
