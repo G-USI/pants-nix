@@ -28,7 +28,14 @@
           extraPythons ? [ ],
         }:
         let
-          info = versionData.${version};
+          info =
+            versionData.${version} or (throw ''
+              pants-nix: Pants ${version} is not packaged. Supported range:
+              2.21.0–${latestVersion}. Generate the release data first:
+                scripts/list-versions.sh > /tmp/versions.txt
+                scripts/gen-versions.sh /tmp/versions.txt
+              then commit pants/versions/ and re-run.
+            '');
           interpreter =
             if info.python == "python39" then pkgs39.python39
             else if info.python == "python311" then pkgs.python311
