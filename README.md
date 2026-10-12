@@ -31,7 +31,9 @@ inputs.pants-nix.url = "github:G-USI/pants-nix";
 
 Bind Pants to the version your repo pins — point `fromPantsToml` at
 your `pants.toml`. Bumping `[GLOBAL].pants_version` re-resolves the
-package on the next eval:
+package on the next eval. Note the file must be **tracked by git** —
+untracked files are invisible to flake source and eval fails with a
+missing-file error:
 
 ```nix
 devShells.x86_64-linux.default =
@@ -55,6 +57,18 @@ Or pick a version explicitly:
 packages = [ (pants-nix.lib.mkPants pkgs pkgs39 { version = "2.31.0"; }) ];
 ```
 
+Both build against **your** nixpkgs. If you want store paths identical
+across machines — the precondition for a shared binary cache — use the
+pinned builders, which build against this flake's nixpkgs instead:
+
+```nix
+packages = [ (pants-nix.pinned.x86_64-linux.fromPantsToml ./pants.toml) ];
+```
+
+If your `pants.toml` lives outside a git-tracked path (e.g. a bare
+repo without commits), pin explicitly with `pinned.mkPantsPinned
+{ version = "…"; }`.
+
 devenv works the same way: add the input, then put the built package
 into `devenv.nix`'s `packages` list.
 
@@ -74,13 +88,17 @@ Unknown versions then fail loudly if not generated.
 
 - Pants boots on a Nix interpreter and executes the release wheel's
   native engine, patchelf'd against Nix libraries at build time.
-- Before launch, `pants-patch-caches` rewrites generic-Linux binaries
-  Pants downloads into its caches (rustup toolchains, interpreters
-  reused by PEX venvs): the interpreter becomes the Nix glibc loader
-  and the Nix lib dir is **appended** to existing rpaths; shared
-  objects are touched only when `ldd` proves unresolvable needs.
-  Atomic, stamp-guarded, backgrounded. Disable with
-  `PANTS_NIX_AUTOPATCH=0`.
+- On launch (synchronously, before Pants starts), `pants-patch-caches`
+  rewrites generic-Linux binaries Pants downloads into its caches
+  (rustup toolchains, interpreters reused by PEX venvs): the
+  interpreter becomes the Nix glibc loader and the Nix lib dir is
+  **appended** to existing rpaths; shared objects are touched only
+  when `ldd` proves unresolvable needs. Atomic, stamp-guarded,
+  single-flight — a warm run is a no-op, so the synchronous launch
+  costs nothing once caches are patched. Disable with
+  `PANTS_NIX_AUTOPATCH=0`. Run it by hand any time with
+  `$(nix build --print-out-paths <flake>#pkg)/bin/pants-patch-caches`;
+  it reports how many binaries and shared objects it patched.
 - Expose the interpreters your resolves need via `extraPythons`
   (`extraPythons = [ pkgs.python314 ];`).
 - **Point every downloaded-tool plugin at PATH binaries.** Any Pants
@@ -100,10 +118,13 @@ Unknown versions then fail loudly if not generated.
 
 ## Requirements & limitations
 
-- x86_64-linux.
+- x86_64-linux only; macOS is not supported (the release wheels are
+  manylinux).
 - One interpreter per Pants version (the release wheel's CPython tag):
   2.21–2.24 → python3.9 (built via the `nixpkgs-py39` input),
   2.25–2.31 → python3.11, 2.32+ → python3.14.
+- A `pants` launcher already on PATH shadows this package's binary —
+  in shells where both exist, check `which pants`.
 - Pants still downloads your resolves at runtime (as upstream); they
   live in Pants' caches, not the Nix store. Downloaded-tool plugins
   (see Runtime behavior) must be re-pointed at PATH binaries — on
