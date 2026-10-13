@@ -1,0 +1,57 @@
+name: CI
+
+# Verification: every package must build on every supported platform.
+# x86_64 runs on ubuntu-latest; aarch64 on GitHub's free arm64 runners
+# (public repos) — real arm64 execution, not QEMU.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feat/**"
+
+permissions:
+  contents: read
+
+jobs:
+  nix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+
+      - name: Flake check (smokes for every wheel era on ${{ matrix.os }})
+        run: nix flake check
+
+      - name: Build every packaged version on ${{ matrix.os }}
+        run: |
+          system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+          attrs=$(nix eval ".#packages.$system" \
+            --apply 'a: builtins.concatStringsSep "\n" (builtins.attrNames (builtins.removeAttrs a [ "default" ]))' \
+            --raw | sed "s|.*|.#packages.$system.&|" | tr '\n' ' ')
+          echo "building on $system:"; echo "$attrs"
+          set +e
+          nix build -L $attrs 2>&1 | tee build.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo "rc=$rc"
+              grep -E '^error:|exit code [1-9]' build.log | tail -10
+              echo '--- tail:'
+              tail -25 build.log
+            } > err.txt
+            echo "::error::$(sed ':a;N;$!ba;s/\n/%0A/g' err.txt)"
+            tail -40 build.log
+            exit "$rc"
+          fi
