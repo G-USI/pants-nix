@@ -11,7 +11,7 @@
   outputs =
     { self, nixpkgs, nixpkgs-py39 }:
     let
-      systems = [ "x86_64-linux" ];
+      systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
       # Per-version release data (url, hash, python tag, lockfile-exact
@@ -36,6 +36,10 @@
                 scripts/gen-versions.sh /tmp/versions.txt
               then commit pants/versions/ and re-run.
             '');
+          arch =
+            info.${pkgs.stdenv.hostPlatform.system} or (throw ''
+              pants-nix: Pants ${version} is not packaged for ${pkgs.stdenv.hostPlatform.system}.
+            '');
           interpreter =
             if info.python == "python39" then pkgs39.python39
             else if info.python == "python311" then pkgs.python311
@@ -44,9 +48,9 @@
         in
         pkgs.callPackage ./pants {
           pantsVersion = version;
-          pantsUrl = info.url;
-          pantsHash = info.hash;
-          inherit (info) deps;
+          pantsUrl = arch.url;
+          pantsHash = arch.hash;
+          deps = arch.deps;
           inherit interpreter extraPythons;
         };
     in
@@ -106,12 +110,19 @@
           pkgs39 = nixpkgs-py39.legacyPackages.${system};
           mangle = nixpkgs.lib.replaceStrings [ "." ] [ "_" ];
         in
-        nixpkgs.lib.mapAttrs' (
-          version: _:
-          nixpkgs.lib.nameValuePair "pants-${mangle version}" (
-            mkPants pkgs pkgs39 { inherit version; }
-          )
-        ) versionData
+        # Versions whose dep closure has no wheels for this system are
+        # skipped entirely (hdrhistogram ships no aarch64 wheels, which
+        # nulls 2.27–2.32.1).
+        nixpkgs.lib.filterAttrs (_: p: p != null) (
+          nixpkgs.lib.mapAttrs' (
+            version: _:
+            nixpkgs.lib.nameValuePair "pants-${mangle version}" (
+              if (versionData.${version}.${system} or null) != null
+              then mkPants pkgs pkgs39 { inherit version; }
+              else null
+            )
+          ) versionData
+        )
         // {
           default = self.packages.${system}."pants-${mangle latestVersion}";
         }
@@ -160,7 +171,11 @@
           pkgs39 = nixpkgs-py39.legacyPackages.${system};
           # One smoke per wheel-era: cp39 (oldest), cp311 (2.31.0),
           # cp314 (latest) — each asserts its own --version output.
+          # Versions without data for this system are skipped (aarch64
+          # nulls for releases whose dep closure never shipped arm64
+          # wheels).
           oldest = nixpkgs.lib.head (nixpkgs.lib.naturalSort (nixpkgs.lib.attrNames versionData));
+          hasArch = version: (versionData.${version}.${system} or null) != null;
           mkSmoke = name: version: extraPythons:
             pkgs.runCommand "pants-${name}-smoke"
               {
@@ -186,10 +201,11 @@
                 cp version.out $out
               '';
         in
-        {
-          version-smoke = mkSmoke "latest" latestVersion [ pkgs.python314 ];
-          py311-smoke = mkSmoke "py311" "2.31.0" [ ];
-          oldest-smoke = mkSmoke "oldest" oldest [ ];
+        nixpkgs.lib.filterAttrs (_: check: check != null) {
+          version-smoke =
+            if hasArch latestVersion system then mkSmoke "latest" latestVersion [ pkgs.python314 ] else null;
+          py311-smoke = if hasArch "2.31.0" system then mkSmoke "py311" "2.31.0" [ ] else null;
+          oldest-smoke = if hasArch oldest system then mkSmoke "oldest" oldest [ ] else null;
         }
       );
     };

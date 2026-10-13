@@ -122,11 +122,15 @@ Unknown versions then fail loudly if not generated.
 
 ## Requirements & limitations
 
-- x86_64-linux only; macOS is not supported (the release wheels are
-  manylinux).
+- x86_64-linux and aarch64-linux (native wheels for both; CI verifies
+  both on real runners). macOS is not supported.
 - One interpreter per Pants version (the release wheel's CPython tag):
   2.21–2.24 → python3.9 (built via the `nixpkgs-py39` input),
   2.25–2.31 → python3.11, 2.32+ → python3.14.
+- On aarch64, releases 2.27.0–2.32.1 are not packaged: their
+  dependency `hdrhistogram` ships no aarch64 wheels at all (upstream
+  dropped it in 2.33). Those versions are absent from
+  `packages.aarch64-linux` rather than half-broken.
 - A `pants` launcher already on PATH shadows this package's binary —
   in shells where both exist, check `which pants`.
 - Pants still downloads your resolves at runtime (as upstream); they

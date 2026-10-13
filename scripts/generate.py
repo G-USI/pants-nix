@@ -145,7 +145,10 @@ def sri_from_hex(hexhash: str) -> str:
     return "sha256-" + base64.b64encode(bytes.fromhex(hexhash)).decode()
 
 
-def pick_artifact(artifacts: list[tuple[str, str]], cp: str) -> tuple[str, str] | None:
+ARCHES = ("x86_64", "aarch64")
+
+
+def pick_artifact(artifacts: list[tuple[str, str]], cp: str, arch: str) -> tuple[str, str] | None:
     """(url, sri) of the best wheel artifact for the release's CPython tag."""
 
     def find(pattern: str):
@@ -155,13 +158,13 @@ def pick_artifact(artifacts: list[tuple[str, str]], cp: str) -> tuple[str, str] 
         return None
 
     return (
-        find(rf"{cp}-{cp}-(manylinux|linux).*x86_64\.whl")
-        or find(r"abi3-manylinux.*x86_64\.whl")
+        find(rf"{cp}-{cp}-(manylinux|linux).*{arch}\.whl")
+        or find(rf"abi3-manylinux.*{arch}\.whl")
         or find(r"none-any\.whl")
     )
 
 
-def pick_dep_wheel(urls: list[dict], cp: str) -> str | None:
+def pick_dep_wheel(urls: list[dict], cp: str, arch: str) -> str | None:
     """URL of the best dependency wheel for the release's CPython tag."""
     def find(pattern: str):
         for u in urls:
@@ -170,23 +173,24 @@ def pick_dep_wheel(urls: list[dict], cp: str) -> str | None:
         return None
 
     return (
-        find(rf"{cp}-{cp}-(manylinux|linux).*x86_64")
-        or find(r"abi3-manylinux.*x86_64")
+        find(rf"{cp}-{cp}-(manylinux|linux).*{arch}")
+        or find(rf"abi3-manylinux.*{arch}")
         or find(r"none-any")
     )
 
 
-def generate(tag: str, wheel_file: str, outdir: Path) -> str:
+def generate(tag: str, wheel_x86: str, wheel_arm: str, outdir: Path) -> str:
     version = tag.removeprefix("release_")
-    cp = re.search(r"-(cp\d+)-cp\d+-", wheel_file)
+    cp = re.search(r"-(cp\d+)-cp\d+-", wheel_x86)
     if not cp:
-        raise ValueError(f"no cp tag in {wheel_file}")
+        raise ValueError(f"no cp tag in {wheel_x86}")
     cp = cp.group(1)
 
-    url = f"https://github.com/pantsbuild/pants/releases/download/{tag}/{wheel_file}"
-    wheel_hash, wheel_path = nix_prefetch(url)
+    def wheel_url(wheel_file: str) -> str:
+        return f"https://github.com/pantsbuild/pants/releases/download/{tag}/{wheel_file}"
 
-    specs = parse_requires_dist(wheel_path)
+    x86_hash, x86_path = nix_prefetch(wheel_url(wheel_x86))
+    specs = parse_requires_dist(x86_path)
     lock = lock_data(tag)
 
     # Expand the wheel's direct runtime deps through the lockfile's own
@@ -223,62 +227,89 @@ def generate(tag: str, wheel_file: str, outdir: Path) -> str:
         closure[n] = lock[n]
         queue.extend(x for x in dep_names_of(lock[n]) if x in lock and x not in closure)
 
-    deps = []
-    for norm in sorted(closure):
-        entry = closure[norm]
-        picked = pick_artifact(entry["artifacts"], cp)
-        if picked:
-            deps.append((norm, *picked))
-            continue
-        # Locked release predates the interpreter (e.g. hdrhistogram
-        # 0.10.3 has no cp314 wheels): resolve the locked version on
-        # PyPI and bump to the first newer release shipping a wheel.
-        ver = entry["version"]
-        rel = http_json(f"https://pypi.org/pypi/{norm}/{ver}/json")
-        dep_url = pick_dep_wheel(rel["urls"], cp)
-        bumped_from = None
-        if not dep_url:
-            all_rels = http_json(f"https://pypi.org/pypi/{norm}/json")["releases"]
-            order = sorted(
-                all_rels,
-                key=lambda v: [
-                    (int(x) if x.isdigit() else 0, x if not x.isdigit() else "")
-                    for x in re.split(r"[.\-]", v)
-                ],
-            )
-            start = order.index(ver) + 1 if ver in order else 0
-            for cand in order[start:]:
-                dep_url = pick_dep_wheel(all_rels[cand], cp)
-                if dep_url:
-                    bumped_from, ver = ver, cand
-                    break
-        if not dep_url:
-            raise ValueError(f"no {cp} wheel for {norm}=={ver}")
-        dep_hash, _ = nix_prefetch(dep_url)
-        if bumped_from is not None:
-            print(
-                f"  note: {norm} bumped {bumped_from} -> {ver} for {cp}",
-                file=sys.stderr,
-                flush=True,
-            )
-        deps.append((norm, dep_url, dep_hash))
-        time.sleep(PYPI_SLEEP)
+    def resolve_arch(arch: str) -> list[tuple[str, str, str]]:
+        deps = []
+        for norm in sorted(closure):
+            entry = closure[norm]
+            picked = pick_artifact(entry["artifacts"], cp, arch)
+            if picked:
+                deps.append((norm, *picked))
+                continue
+            # Locked release predates the interpreter (e.g. hdrhistogram
+            # 0.10.3 has no cp314 wheels): resolve the locked version on
+            # PyPI and bump to the first newer release shipping a wheel.
+            ver = entry["version"]
+            rel = http_json(f"https://pypi.org/pypi/{norm}/{ver}/json")
+            dep_url = pick_dep_wheel(rel["urls"], cp, arch)
+            bumped_from = None
+            if not dep_url:
+                all_rels = http_json(f"https://pypi.org/pypi/{norm}/json")["releases"]
+                order = sorted(
+                    all_rels,
+                    key=lambda v: [
+                        (int(x) if x.isdigit() else 0, x if not x.isdigit() else "")
+                        for x in re.split(r"[.\-]", v)
+                    ],
+                )
+                start = order.index(ver) + 1 if ver in order else 0
+                for cand in order[start:]:
+                    dep_url = pick_dep_wheel(all_rels[cand], cp, arch)
+                    if dep_url:
+                        bumped_from, ver = ver, cand
+                        break
+            if not dep_url:
+                raise ValueError(f"no {arch} {cp} wheel for {norm}=={ver}")
+            dep_hash, _ = nix_prefetch(dep_url)
+            if bumped_from is not None:
+                print(
+                    f"  note: {arch} {norm} bumped {bumped_from} -> {ver} for {cp}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            deps.append((norm, dep_url, dep_hash))
+            time.sleep(PYPI_SLEEP)
+        return deps
 
-    body = "".join(
-        f'  {{ name = "{n}"; url = "{u}"; hash = "{h}"; }}\n' for n, u, h in deps
-    )
+    x86_deps = resolve_arch("x86_64")
+    try:
+        arm_deps = resolve_arch("aarch64")
+    except ValueError as e:
+        arm_deps = None
+        print(
+            f"  note: aarch64 unavailable for {version} — emitting null: {e}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def fmt_arch(platform: str, url: str, whash: str, deps: list[tuple[str, str, str]]) -> str:
+        body = "".join(
+            f'    {{ name = "{n}"; url = "{u}"; hash = "{h}"; }}\n' for n, u, h in deps
+        )
+        return (
+            f"  {platform} = {{\n"
+            f'    url = "{url}";\n'
+            f'    hash = "{whash}";\n'
+            "    deps = [\n"
+            f"{body}"
+            "    ];\n"
+            "  };\n"
+        )
+
+    parts = [fmt_arch("x86_64-linux", wheel_url(wheel_x86), x86_hash, x86_deps)]
+    if arm_deps is None:
+        parts.append("  aarch64-linux = null;\n")
+    else:
+        arm_hash, _ = nix_prefetch(wheel_url(wheel_arm))
+        parts.append(fmt_arch("aarch64-linux", wheel_url(wheel_arm), arm_hash, arm_deps))
+
     outdir.joinpath(f"{version}.nix").write_text(
         f"# Generated by scripts/generate.py from {tag} — do not edit.\n"
         "{\n"
-        f'  url = "{url}";\n'
-        f'  hash = "{wheel_hash}";\n'
         f'  python = "python{cp.removeprefix("cp")}";\n'
-        "  deps = [\n"
-        f"{body}"
-        "  ];\n"
-        "}\n"
+        + "".join(parts)
+        + "}\n"
     )
-    return f"OK {version} ({cp}, {len(deps)} deps)"
+    return f"OK {version} ({cp}, x86_64: {len(x86_deps)} deps, aarch64: {'—' if arm_deps is None else f'{len(arm_deps)} deps'})"
 
 
 def main() -> int:
@@ -290,9 +321,9 @@ def main() -> int:
     for line in tag_file.read_text().splitlines():
         if not line.strip():
             continue
-        tag, wheel_file = line.split()
+        tag, wheel_x86, wheel_arm = line.split()
         try:
-            print(generate(tag, wheel_file, outdir), flush=True)
+            print(generate(tag, wheel_x86, wheel_arm, outdir), flush=True)
         except Exception as e:  # noqa: BLE001 - report and continue
             failures.append((tag, str(e)))
             print(f"FAIL {tag}: {e}", file=sys.stderr, flush=True)

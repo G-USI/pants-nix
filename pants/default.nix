@@ -146,6 +146,6 @@ stdenv.mkDerivation rec {
     homepage = "https://www.pantsbuild.org/";
     license = lib.licenses.asl20;
     mainProgram = "pants";
-    platforms = [ "x86_64-linux" ];
+    platforms = [ "x86_64-linux" "aarch64-linux" ];
   };
 }
