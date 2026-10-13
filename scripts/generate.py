@@ -195,6 +195,13 @@ def generate(tag: str, wheel_file: str, outdir: Path) -> str:
     def dep_names_of(entry: dict) -> list[str]:
         names = []
         for rd in entry.get("requires_dists", []) or []:
+            # PEP 508: requirements behind `extra == "..."` markers are
+            # opt-in features of the dependency, never installed at
+            # runtime — following them pulled test/type toolchains
+            # (mypy, pytest, ...) into every closure.
+            _, _, marker = rd.partition(";")
+            if "extra" in marker:
+                continue
             m = re.match(r"^([A-Za-z0-9_.\-]+)", rd.strip())
             if m:
                 names.append(m.group(1).lower().replace("_", "-"))
