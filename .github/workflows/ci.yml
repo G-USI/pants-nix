@@ -37,8 +37,8 @@ jobs:
         run: |
           system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
           attrs=$(nix eval ".#packages.$system" \
-            --apply 'a: builtins.concatStringsSep " " (builtins.attrNames (builtins.removeAttrs a [ "default" ]))' \
-            --raw)
+            --apply 'a: builtins.concatStringsSep "\n" (builtins.attrNames (builtins.removeAttrs a [ "default" ]))' \
+            --raw | sed "s|.*|.#packages.$system.&|" | tr '\n' ' ')
           echo "building on $system:"; echo "$attrs"
           set +e
           nix build -L $attrs 2>&1 | tee build.log
