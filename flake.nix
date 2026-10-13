@@ -203,9 +203,9 @@
         in
         nixpkgs.lib.filterAttrs (_: check: check != null) {
           version-smoke =
-            if hasArch latestVersion system then mkSmoke "latest" latestVersion [ pkgs.python314 ] else null;
-          py311-smoke = if hasArch "2.31.0" system then mkSmoke "py311" "2.31.0" [ ] else null;
-          oldest-smoke = if hasArch oldest system then mkSmoke "oldest" oldest [ ] else null;
+            if hasArch latestVersion then mkSmoke "latest" latestVersion [ pkgs.python314 ] else null;
+          py311-smoke = if hasArch "2.31.0" then mkSmoke "py311" "2.31.0" [ ] else null;
+          oldest-smoke = if hasArch oldest then mkSmoke "oldest" oldest [ ] else null;
         }
       );
     };
