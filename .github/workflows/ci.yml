@@ -27,8 +27,6 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v16
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
-
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
 
@@ -42,4 +40,12 @@ jobs:
             --apply 'a: builtins.concatStringsSep " " (builtins.attrNames (builtins.removeAttrs a [ "default" ]))' \
             --raw)
           echo "building on $system:"; echo "$attrs"
-          nix build $attrs
+          set +e
+          nix build $attrs 2>&1 | tee build.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::nix build failed (rc=$rc) — last 40 lines:"
+            tail -40 build.log
+            exit "$rc"
+          fi
