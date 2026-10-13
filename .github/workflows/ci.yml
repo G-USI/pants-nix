@@ -41,11 +41,17 @@ jobs:
             --raw)
           echo "building on $system:"; echo "$attrs"
           set +e
-          nix build $attrs 2>&1 | tee build.log
+          nix build -L $attrs 2>&1 | tee build.log
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
-            echo "::error::nix build failed (rc=$rc) — last 40 lines:"
+            {
+              echo "rc=$rc"
+              grep -E '^error:|exit code [1-9]' build.log | tail -10
+              echo '--- tail:'
+              tail -25 build.log
+            } > err.txt
+            echo "::error::$(sed ':a;N;$!ba;s/\n/%0A/g' err.txt)"
             tail -40 build.log
             exit "$rc"
           fi
