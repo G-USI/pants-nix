@@ -102,8 +102,12 @@ Unknown versions then fail loudly if not generated.
 - Expose the interpreters your resolves need via `extraPythons`
   (`extraPythons = [ pkgs.python314 ];`).
 - **Point every downloaded-tool plugin at PATH binaries.** Any Pants
-  plugin that downloads an external tool (nodejs, terraform, helm, …)
-  will otherwise fetch a generic-Linux binary that cannot run on NixOS.
+  plugin that downloads an external tool (nodejs, terraform, helm,
+  rustup-init, …) will otherwise fetch a generic-Linux binary that
+  cannot run on NixOS. Note the exec happens mid-run from a process
+  sandbox, so the cache sweep cannot rescue these — the binary must
+  come from the invoking shell's PATH (or the plugin must be configured
+  to skip its own download).
   The standard pattern works per subsystem: set its version to one
   **outside** the plugin's `known_versions` (e.g.
   `PANTS_NODEJS_VERSION=24.14.0` — only `v24.10.0` is known for nodejs
